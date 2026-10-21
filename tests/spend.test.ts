@@ -70,7 +70,7 @@ test('a turn shows its tokens, its subagent included, and its cost', { options: 
   for (const surface of SURFACES) {
     const pane = await $.ui.mount({ ...PANE, surface })
     const texts = (await pane.findAll({ type: 'Text' })).map(f => f.text).join(' | ')
-    expect(texts).toContain('12k · $0.25 · 0:03')
+    expect(texts).toContain('0:03 · 12k · $0.25')
     expect(texts).toContain('input 600 · output 1.4k · cache read 10k · cache write 0')
     await pane.unmount()
 

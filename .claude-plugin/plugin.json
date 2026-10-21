@@ -1,6 +1,6 @@
 {
   "name": "tickturn",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Time, tokens and cost of each Claude turn and the session total: a band above the prompt and a /time pane. Russian or English UI by the system language.",
   "types": "./types/index.d.ts",
   "author": {

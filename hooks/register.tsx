@@ -339,8 +339,8 @@ export const register: Register = (on, options) => {
               {row.n}. {row.text}
             </Text>
             <Text>
-              {row.spend && `${row.spend} · `}
               {row.time}
+              {row.spend && ` · ${row.spend}`}
             </Text>
           </Box>
         ))}
@@ -349,7 +349,7 @@ export const register: Register = (on, options) => {
             {t.total} ({rows.length})
           </Text>
           <Text bold>
-            {spend(total.tokens, total.usd)} · {fmt(done + now)}
+            {fmt(done + now)} · {spend(total.tokens, total.usd)}
           </Text>
         </Box>
         <Text dimColor>
