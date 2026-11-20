@@ -29,8 +29,32 @@ export type RunningTurn = {
   usdAtStart?: number
 }
 
+/** One local day's totals over the turns that finished on it. */
+export type DayTotals = {
+  usd: number
+  requests: number
+  seconds: number
+}
+
+/** Totals by local day, keyed `YYYY-MM-DD`. */
+export type Days = Record<string, DayTotals>
+
+/** The days this session has booked so far in the current month, as its file holds them. */
+export type OwnDays = { sessionId: string; days: Days }
+
+/** What the band and the pane draw: every session's money for `day` and for its month. */
+export type Daily = { day: string; today: number; month: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'tickturn': { turns: TurnRecord[]; running: RunningTurn | null; tokens: Tokens }
+    'tickturn': {
+      turns: TurnRecord[]
+      running: RunningTurn | null
+      tokens: Tokens
+      /** The session cost at the last turn booked; null until the first. */
+      lastUsd: number | null
+      own: OwnDays | null
+      daily: Daily | null
+    }
   }
 }

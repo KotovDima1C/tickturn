@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { RunningTurn, Tokens, TurnRecord } from '../types'
+import type { DayTotals, Days, RunningTurn, Tokens, TurnRecord } from '../types'
 
 const PANE = 'tickturn'
 const COMMAND = 'time'
@@ -32,6 +32,14 @@ const STRINGS = {
     command: 'Время по запросам этой сессии в панели',
     opened: 'Панель времени открыта.',
     notOpened: 'Не удалось открыть панель: ',
+    today: 'Сегодня',
+    thisMonth: 'Этот месяц',
+    reportTitle: 'Расходы Claude Code',
+    day: 'День',
+    month: 'Месяц',
+    amount: 'Сумма',
+    reportRequests: 'Запросов',
+    time: 'Время',
   },
   en: {
     running: 'Running',
@@ -54,6 +62,14 @@ const STRINGS = {
     command: 'Time per request of this session, in a pane',
     opened: 'Time pane opened.',
     notOpened: 'Could not open the pane: ',
+    today: 'Today',
+    thisMonth: 'This month',
+    reportTitle: 'Claude Code spending',
+    day: 'Day',
+    month: 'Month',
+    amount: 'Amount',
+    reportRequests: 'Requests',
+    time: 'Time',
   },
 } satisfies Record<Lang, unknown>
 
@@ -91,6 +107,8 @@ const detect = async ($: EngineInterface, option: unknown): Promise<Lang> => {
 /** The `language` option as `register` received it, and the detection it led to, once. */
 let languageOption: unknown
 let language: Promise<Lang> | undefined
+/** The `reportPath` option as `register` received it. */
+let reportOption: unknown
 
 const strings = async ($: EngineInterface): Promise<Strings> => {
   language ??= detect($, languageOption)
@@ -102,6 +120,9 @@ const running = atom({ plugin: 'tickturn', key: 'running' } as const, null)
 const NO_TOKENS: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 /** Every turn's tokens this session, subagents' included: a turn's own is the growth of this while it ran. */
 const spent = atom({ plugin: 'tickturn', key: 'tokens' } as const, NO_TOKENS)
+const lastUsd = atom({ plugin: 'tickturn', key: 'lastUsd' } as const, null)
+const own = atom({ plugin: 'tickturn', key: 'own' } as const, null)
+const daily = atom({ plugin: 'tickturn', key: 'daily' } as const, null)
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -146,6 +167,225 @@ const sessionUsd = async ($: EngineInterface): Promise<number | undefined> => {
   }
 }
 
+const DAY_MS = 86_400_000
+const NO_DAY: DayTotals = { usd: 0, requests: 0, seconds: 0 }
+
+/** The local calendar day of a time, `YYYY-MM-DD`. */
+const dayKey = (ms: number) => {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+const monthOf = (day: string) => day.slice(0, 7)
+
+const addDay = (a: DayTotals, b: DayTotals): DayTotals => ({
+  usd: a.usd + b.usd,
+  requests: a.requests + b.requests,
+  seconds: a.seconds + b.seconds,
+})
+
+const merge = (into: Days, from: Days): Days => {
+  const out: Days = { ...into }
+  for (const [day, totals] of Object.entries(from)) out[day] = addDay(out[day] ?? NO_DAY, totals)
+  return out
+}
+
+let hasComplained = false
+
+/** One log line per process about a file the statistics could not use. */
+const complain = async ($: EngineInterface, what: string) => {
+  if (hasComplained) return
+  hasComplained = true
+  try {
+    await $.ui.log(`tickturn: ${what}`)
+  } catch {
+    // nowhere to say it
+  }
+}
+
+/** The days a statistics file holds; entries that are not day totals are left out. */
+const parseDays = (text: string): Days => {
+  const days: Days = {}
+  const raw: unknown = JSON.parse(text)
+  const map = typeof raw === 'object' && raw !== null ? (raw as { days?: unknown }).days : undefined
+  if (typeof map !== 'object' || map === null) return days
+  for (const [day, value] of Object.entries(map)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || typeof value !== 'object' || value === null) continue
+    const totals = value as Partial<Record<keyof DayTotals, unknown>>
+    days[day] = {
+      usd: Number(totals.usd) || 0,
+      requests: Number(totals.requests) || 0,
+      seconds: Number(totals.seconds) || 0,
+    }
+  }
+  return days
+}
+
+/** A statistics file's days, or undefined when it cannot be read or parsed. */
+const readDays = async ($: EngineInterface, path: string): Promise<Days | undefined> => {
+  try {
+    return parseDays(await $.fs.read(path))
+  } catch (error) {
+    await complain($, `${path}: ${String(error)}`)
+    return undefined
+  }
+}
+
+/** A folder's entries, none where it is not there. */
+const list = async ($: EngineInterface, path: string) => {
+  try {
+    return await $.fs.list(path)
+  } catch {
+    return []
+  }
+}
+
+/** Session files read so far, by `<month>/<name>`, with the size and time they were read at. */
+const seen = new Map<string, { mtimeMs: number; size: number; days: Days }>()
+/** Rolled-up months read so far, by month. */
+const rolled = new Map<string, Days>()
+
+/** One month's session files summed by day; `isWhole` is false when a file could not be used. */
+const sessionsOf = async ($: EngineInterface, dir: string, month: string) => {
+  let days: Days = {}
+  let isWhole = true
+  for (const entry of await list($, `${dir}/sessions/${month}`)) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    const key = `${month}/${entry.name}`
+    let hit = seen.get(key)
+    if (!hit || hit.mtimeMs !== entry.mtimeMs || hit.size !== entry.size) {
+      const fresh = await readDays($, `${dir}/sessions/${key}`)
+      if (fresh === undefined) {
+        isWhole = false
+        continue
+      }
+      hit = { mtimeMs: entry.mtimeMs, size: entry.size, days: fresh }
+      seen.set(key, hit)
+    }
+    days = merge(days, hit.days)
+  }
+  return { days, isWhole }
+}
+
+/**
+ * Every session's days on this computer, summed. A month with a file under
+ * `months/` is read from it alone; a month that ended over a day ago and has
+ * none gets one, written from its session files once they all parse.
+ */
+const collect = async ($: EngineInterface, dir: string, now: number) => {
+  let all: Days = {}
+  const done = new Set<string>()
+  for (const entry of await list($, `${dir}/months`)) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    const month = entry.name.slice(0, -'.json'.length)
+    let days = rolled.get(month)
+    if (!days) {
+      days = await readDays($, `${dir}/months/${entry.name}`)
+      if (!days) continue
+      rolled.set(month, days)
+    }
+    done.add(month)
+    all = merge(all, days)
+  }
+
+  const open = monthOf(dayKey(now - DAY_MS))
+  for (const folder of await list($, `${dir}/sessions`)) {
+    if (folder.kind !== 'dir' || done.has(folder.name)) continue
+    const { days, isWhole } = await sessionsOf($, dir, folder.name)
+    if (isWhole && folder.name < open) {
+      await $.fs.write(`${dir}/months/${folder.name}.json`, JSON.stringify({ days }))
+    }
+    all = merge(all, days)
+  }
+  return all
+}
+
+const fmtHms = (seconds: number) =>
+  `${Math.floor(seconds / 3600)}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`
+
+/** The report file: a table of days and a table of months, newest first. */
+const report = (all: Days, t: Strings) => {
+  const byNewest = (days: Days) => Object.entries(days).sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+  const months: Days = {}
+  for (const [day, totals] of Object.entries(all)) {
+    months[monthOf(day)] = addDay(months[monthOf(day)] ?? NO_DAY, totals)
+  }
+  const table = (head: string, rows: Days) =>
+    [
+      `| ${head} | ${t.amount} | ${t.reportRequests} | ${t.time} |`,
+      '| --- | --- | --- | --- |',
+      ...byNewest(rows).map(
+        ([name, totals]) => `| ${name} | ${fmtUsd(totals.usd)} | ${totals.requests} | ${fmtHms(totals.seconds)} |`,
+      ),
+    ].join('\n')
+  return `# ${t.reportTitle}\n\n${table(t.day, all)}\n\n${table(t.month, months)}\n`
+}
+
+/**
+ * What the session cost grew by since the last turn booked. At the first turn
+ * booked that is the turn's own cost, so a resumed session's earlier spend is
+ * not booked twice; a counter that started over counts from zero.
+ */
+const growth = async ($: EngineInterface, record: TurnRecord) => {
+  const now = await sessionUsd($)
+  if (now === undefined) return 0
+  const last = await read($, lastUsd)
+  await update($, lastUsd, () => now)
+  if (last === null) return Math.max(0, record.usd ?? 0)
+  return now >= last ? now - last : now
+}
+
+/** The person's home and the mod's data folder under it; undefined where no home is named. */
+const dataDir = async ($: EngineInterface) => {
+  const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
+  return home ? { home, dir: `${home}/.claude/tickturn` } : undefined
+}
+
+/**
+ * Adds a finished turn to today's totals of this session, writes the session's
+ * file whole, then sums every session's for the band, the pane and the report.
+ */
+const book = async ($: EngineInterface, record: TurnRecord) => {
+  const place = await dataDir($)
+  if (!place) return
+
+  const now = await $.clock.now()
+  const day = dayKey(now)
+  const month = monthOf(day)
+  const id = await $.session.id()
+  const path = `${place.dir}/sessions/${month}/${id}.json`
+
+  const held = await read($, own)
+  const before =
+    held?.sessionId === id
+      ? held.days
+      : (await $.fs.exists(path))
+        ? ((await readDays($, path)) ?? {})
+        : {}
+  const days: Days = {}
+  for (const [key, totals] of Object.entries(before)) {
+    if (monthOf(key) === month) days[key] = totals
+  }
+  days[day] = addDay(days[day] ?? NO_DAY, {
+    usd: await growth($, record),
+    requests: 1,
+    seconds: record.seconds,
+  })
+  await update($, own, () => ({ sessionId: id, days }))
+  await $.fs.write(path, JSON.stringify({ days }))
+
+  const all = await collect($, place.dir, now)
+  let monthUsd = 0
+  for (const [key, totals] of Object.entries(all)) {
+    if (monthOf(key) === month) monthUsd += totals.usd
+  }
+  await update($, daily, () => ({ day, today: all[day]?.usd ?? 0, month: monthUsd }))
+
+  const custom = typeof reportOption === 'string' ? reportOption.trim() : ''
+  const target = custom === '' ? `${place.dir}/costs.md` : custom.replace(/^~(?=[\\/]|$)/, place.home)
+  await $.fs.write(target, report(all, await strings($)))
+}
+
 /** The running turn's tokens and cost so far, from the snapshots its start took. */
 const sofar = async ($: EngineInterface, turn: RunningTurn) => {
   const usd = turn.usdAtStart === undefined ? undefined : await sessionUsd($)
@@ -183,6 +423,10 @@ export const register: Register = (on, options) => {
   let isRunning = false
   languageOption = options.language
   language = undefined
+  reportOption = options.reportPath
+  hasComplained = false
+  seen.clear()
+  rolled.clear()
 
   on('session.start', async ($, e, next) => {
     const t = await strings($)
@@ -240,6 +484,13 @@ export const register: Register = (on, options) => {
     await update($, running, () => null)
     isRunning = false
 
+    try {
+      await book($, record)
+    } catch (error) {
+      // the day's statistics never stand in a turn's way
+      await complain($, String(error))
+    }
+
     return next(e)
   })
 
@@ -282,6 +533,11 @@ export const register: Register = (on, options) => {
     const tail =
       ` · ${t.tokens}: ${fmtTokens(sum(total.tokens))}` +
       (total.usd !== undefined ? ` · ${fmtUsd(total.usd)}` : '')
+    const spentToday = await read($, daily)
+    const today =
+      spentToday && total.usd !== undefined && spentToday.day === dayKey(await $.clock.now())
+        ? ` · ${t.today}: ${fmtUsd(spentToday.today)}`
+        : ''
 
     const { Box, Button, Text } = $.ui.resolve(e)
 
@@ -290,6 +546,7 @@ export const register: Register = (on, options) => {
         <Text dimColor>
           {head} · {t.session}: {fmt(done + now)} · {t.requests}: {count}
           {tail}
+          {today}
         </Text>
         <Button
           key="history"
@@ -326,7 +583,13 @@ export const register: Register = (on, options) => {
       })
     }
 
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 7)
+    const spentToday = await read($, daily)
+    const money =
+      spentToday && total.usd !== undefined && spentToday.day === dayKey(await $.clock.now())
+        ? spentToday
+        : null
+
+    const room = Math.max(1, (e.viewport?.rows ?? 24) - 7 - (money ? 2 : 0))
     const shown = rows.slice(-room)
 
     return (
@@ -357,6 +620,18 @@ export const register: Register = (on, options) => {
           {t.cacheRead} {fmtTokens(total.tokens.cacheRead)} · {t.cacheWrite}{' '}
           {fmtTokens(total.tokens.cacheWrite)}
         </Text>
+        {money && (
+          <Box justifyContent="space-between" gap={1}>
+            <Text>{t.today}</Text>
+            <Text>{fmtUsd(money.today)}</Text>
+          </Box>
+        )}
+        {money && (
+          <Box justifyContent="space-between" gap={1}>
+            <Text>{t.thisMonth}</Text>
+            <Text>{fmtUsd(money.month)}</Text>
+          </Box>
+        )}
       </Box>
     )
   })
