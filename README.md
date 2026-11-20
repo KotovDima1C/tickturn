@@ -6,9 +6,10 @@
 
 ![Полоса над полем ввода с живым отсчётом и панель истории](docs/screenshots/mock-running.png)
 
-- **Полоса над полем ввода** — живой таймер, пока ход идёт (`⏱ Идёт: 0:42 · Сессия: 4:22 · запросов: 7 · токенов: 1.2M · $0.84`), и время последнего хода в покое.
+- **Полоса над полем ввода** — живой таймер, пока ход идёт (`⏱ Идёт: 0:42 · Сессия: 4:22 · запросов: 7 · токенов: 1.2M · $0.84 · Сегодня: $3.42`), и время последнего хода в покое.
 - **Панель истории** (`/time` или кнопка **История**) — все запросы сессии с токенами, стоимостью, длительностью и итогом; под итогом — разбивка токенов: ввод, вывод, чтение и запись кэша.
 - **Токены** — все четыре счётчика API (ввод, вывод, кэш: чтение и запись), вместе с субагентами хода. **Стоимость** — на сколько выросла стоимость сессии (как в `/cost`) за время хода; где движок её не ведёт, сумма не показывается.
+- **Статистика по дням** — мод копит по всем сессиям на компьютере деньги, число запросов и время работы за каждый день. В полосе видно `Сегодня: $3.42`, в панели — «Сегодня» и «Этот месяц», а полная история по дням и месяцам лежит в файле `~/.claude/tickturn/costs.md`.
 - Прерванные ходы помечаются `(прервано)`, завершившиеся ошибкой — `(ошибка)`. `/clear` сбрасывает историю.
 
 Работает в терминале и в десктопном приложении Claude. Язык интерфейса подбирается по языку системы: русский или английский.
@@ -50,6 +51,29 @@ claude --plugin-dir /path/to/tickturn
 { "pluginConfigs": { "tickturn": { "options": { "language": "en" } } } }
 ```
 
+## Статистика по дням
+
+После каждого запроса мод прибавляет его стоимость, время и сам запрос к текущему дню и пересобирает отчёт:
+
+| День       | Сумма  | Запросов | Время   |
+| ---------- | ------ | -------- | ------- |
+| 2026-11-20 | $3.42  | 18       | 0:45:10 |
+| 2026-11-19 | $11.07 | 52       | 2:13:48 |
+
+Ниже в файле — такая же таблица по месяцам. Отчёт лежит в `~/.claude/tickturn/costs.md`; другой путь задаётся настройкой `tickturn.reportPath` (`/config` → tickturn → Report file) или в `~/.claude/settings.json`:
+
+```json
+{ "pluginConfigs": { "tickturn": { "options": { "reportPath": "~/notes/claude-costs.md" } } } }
+```
+
+Что стоит знать:
+
+- Сумма — оценка по тарифам API, та же, что показывает `/cost`; на подписке это не реальное списание.
+- День — местная дата окончания запроса. Время — сколько Claude работал над запросами, а не сколько была открыта сессия.
+- Учёт идёт с момента установки версии 0.4.0 и только на этом компьютере.
+- «Сегодня» обновляется, когда запрос заканчивается в этой сессии: траты соседних сессий появятся после следующего своего запроса.
+- Данные лежат в `~/.claude/tickturn/`: по файлу на сессию в `sessions/<месяц>/`, закончившиеся месяцы сворачиваются в `months/<месяц>.json`.
+
 ## Как это работает
 
 Мод — это модуль хуков (`hooks/register.tsx`):
@@ -57,6 +81,7 @@ claude --plugin-dir /path/to/tickturn
 - `turn.start` / `turn.complete` — измеряют каждый ход главного цикла (`durationMs` от движка); ходы субагентов отдельно не считаются, но их токены входят в ход, внутри которого они шли.
 - `$.session.usage()` — стоимость сессии в начале и в конце хода.
 - `ui.render` на `AbovePrompt` и `Pane` — рисуют полосу и историю.
+- `$.fs` — файл своей сессии, чтение файлов остальных и отчёт; `$.session.id()` — имя файла сессии.
 - `$.env.get` и `Intl` — определяют язык один раз при загрузке.
 - Состояние живёт в `$.state` (`types/index.d.ts` — его контракт) и переживает горячую перезагрузку модуля в пределах сессии.
 
@@ -85,9 +110,10 @@ A [Claude Code](https://claude.com/claude-code) mod that shows how much time, ho
 
 ![Band above the prompt with a live timer and the history pane](docs/screenshots/mock-running-en.png)
 
-- **Band above the prompt** — a live timer while a turn runs (`⏱ Running: 0:42 · Session: 4:22 · requests: 7 · tokens: 1.2M · $0.84`), the last turn's time when idle.
+- **Band above the prompt** — a live timer while a turn runs (`⏱ Running: 0:42 · Session: 4:22 · requests: 7 · tokens: 1.2M · $0.84 · Today: $3.42`), the last turn's time when idle.
 - **History pane** (`/time` or the **History** button) — every request of the session with its tokens, cost, duration and the total; under the total, the tokens broken down into input, output, cache read and cache write.
 - **Tokens** are all four API counts (input, output, cache read and write), the turn's subagents included. **Cost** is how much the session cost (as `/cost` totals it) grew during the turn; where the engine keeps no cost ledger, no amount is shown.
+- **Daily statistics** — the mod adds up money, requests and working time for each day across every session on the computer. The band shows `Today: $3.42`, the pane shows “Today” and “This month”, and the full history by day and month is kept in `~/.claude/tickturn/costs.md`.
 - Interrupted turns are marked `(interrupted)`, failed ones `(error)`. `/clear` resets the history.
 
 Works in the terminal and in the Claude desktop app. The UI follows the system language: Russian or English.
@@ -129,6 +155,29 @@ Override it in the mod's `tickturn.language` setting (`/config` → tickturn →
 { "pluginConfigs": { "tickturn": { "options": { "language": "en" } } } }
 ```
 
+## Daily statistics
+
+After each request the mod adds its cost, its time and the request itself to the current day and rebuilds the report:
+
+| Day        | Amount | Requests | Time    |
+| ---------- | ------ | -------- | ------- |
+| 2026-11-20 | $3.42  | 18       | 0:45:10 |
+| 2026-11-19 | $11.07 | 52       | 2:13:48 |
+
+The same table by month follows in the file. The report is `~/.claude/tickturn/costs.md`; name another path in the `tickturn.reportPath` setting (`/config` → tickturn → Report file) or in `~/.claude/settings.json`:
+
+```json
+{ "pluginConfigs": { "tickturn": { "options": { "reportPath": "~/notes/claude-costs.md" } } } }
+```
+
+Worth knowing:
+
+- The amount is an estimate at API prices, the one `/cost` shows; on a subscription it is not what you were charged.
+- The day is the local date a request finished on. The time is how long Claude worked on requests, not how long the session stayed open.
+- Counting starts when version 0.4.0 is installed, and covers this computer only.
+- “Today” is refreshed when a request finishes in this session: what other sessions spent appears after this session's next request.
+- The data is in `~/.claude/tickturn/`: a file per session under `sessions/<month>/`, finished months rolled up into `months/<month>.json`.
+
 ## How it works
 
 The mod is a hooks module (`hooks/register.tsx`):
@@ -136,6 +185,7 @@ The mod is a hooks module (`hooks/register.tsx`):
 - `turn.start` / `turn.complete` — measure each main-loop turn (`durationMs` from the engine); subagent turns are not counted separately, but their tokens count toward the turn they ran in.
 - `$.session.usage()` — the session cost at the start and the end of each turn.
 - `ui.render` on `AbovePrompt` and `Pane` — draw the band and the history.
+- `$.fs` — the session's own file, the other sessions' files and the report; `$.session.id()` names the session's file.
 - `$.env.get` and `Intl` — pick the language once at load.
 - State lives in `$.state` (`types/index.d.ts` is its contract) and survives hot reloads of the module within a session.
 
