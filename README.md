@@ -23,7 +23,7 @@
 В терминале:
 
 ```
-/plugin install tickturn --marketplace dimakotov1c/tickturn
+/plugin install tickturn --marketplace KotovDima1C/tickturn
 ```
 
 Ответьте `y`, чтобы добавить marketplace, и выберите область **user** — тогда мод загрузится во всех проектах.
@@ -127,7 +127,7 @@ Works in the terminal and in the Claude desktop app. The UI follows the system l
 In a terminal:
 
 ```
-/plugin install tickturn --marketplace dimakotov1c/tickturn
+/plugin install tickturn --marketplace KotovDima1C/tickturn
 ```
 
 Answer `y` to add the marketplace, then pick the **user** scope so the mod loads in every project.
