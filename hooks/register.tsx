@@ -1,12 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { DayTotals, Days, RunningTurn, Tokens, TurnRecord } from '../types'
+import type { DayTotals, Days, RunningTurn, Tokens, TurnReason, TurnRecord } from '../types'
 
 const PANE = 'tickturn'
 const COMMAND = 'time'
 const MAX_TURNS = 500
 const LABEL_CHARS = 25
+/** How much of a request's text a record keeps: enough for the label, not the whole prompt on disk. */
+const TEXT_CHARS = 100
 
 type Lang = 'ru' | 'en'
 
@@ -341,6 +343,81 @@ const dataDir = async ($: EngineInterface) => {
   return home ? { home, dir: `${home}/.claude/tickturn` } : undefined
 }
 
+/** Sums every session's days and keeps today's and this month's money for the band and the pane. */
+const refreshDaily = async ($: EngineInterface, dir: string, now: number) => {
+  const day = dayKey(now)
+  const month = monthOf(day)
+  const all = await collect($, dir, now)
+  let monthUsd = 0
+  for (const [key, totals] of Object.entries(all)) {
+    if (monthOf(key) === month) monthUsd += totals.usd
+  }
+  await update($, daily, () => ({ day, today: all[day]?.usd ?? 0, month: monthUsd }))
+  return all
+}
+
+const isReason = (value: unknown): value is TurnReason =>
+  value === 'answer' || value === 'aborted' || value === 'refusal' || value === 'error'
+
+const toTokens = (value: unknown): Tokens | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const raw = value as Partial<Record<keyof Tokens, unknown>>
+  return {
+    input: Number(raw.input) || 0,
+    output: Number(raw.output) || 0,
+    cacheRead: Number(raw.cacheRead) || 0,
+    cacheWrite: Number(raw.cacheWrite) || 0,
+  }
+}
+
+/** A history file's turns and token total; records that are not turns are left out. */
+const parseHistory = (text: string): { turns: TurnRecord[]; tokens: Tokens } => {
+  const raw: unknown = JSON.parse(text)
+  const body = typeof raw === 'object' && raw !== null ? (raw as { turns?: unknown; tokens?: unknown }) : {}
+  const turns: TurnRecord[] = []
+  for (const item of Array.isArray(body.turns) ? body.turns : []) {
+    if (typeof item !== 'object' || item === null) continue
+    const r = item as Record<string, unknown>
+    if (typeof r.id !== 'string' || !isReason(r.reason)) continue
+    const tokens = toTokens(r.tokens)
+    turns.push({
+      id: r.id,
+      text: typeof r.text === 'string' ? r.text : '',
+      seconds: Number(r.seconds) || 0,
+      reason: r.reason,
+      ...(tokens && { tokens }),
+      ...(typeof r.usd === 'number' && { usd: r.usd }),
+    })
+  }
+  return { turns: turns.slice(-MAX_TURNS), tokens: toTokens(body.tokens) ?? NO_TOKENS }
+}
+
+const historyPath = (dir: string, id: string) => `${dir}/history/${id}.json`
+
+/** Writes this session's turns and token total whole, so a restart or a resume can bring them back. */
+const saveHistory = async ($: EngineInterface) => {
+  const place = await dataDir($)
+  if (!place) return
+  const body = { turns: await read($, turns), tokens: await read($, spent) }
+  await $.fs.write(historyPath(place.dir, await $.session.id()), JSON.stringify(body))
+}
+
+/** Puts this session's saved turns back when the mod starts with none in memory. */
+const loadHistory = async ($: EngineInterface, dir: string) => {
+  if ((await read($, turns)).length > 0 || (await read($, running)) !== null) return
+  const path = historyPath(dir, await $.session.id())
+  if (!(await $.fs.exists(path))) return
+  let saved: ReturnType<typeof parseHistory>
+  try {
+    saved = parseHistory(await $.fs.read(path))
+  } catch (error) {
+    await complain($, `${path}: ${String(error)}`)
+    return
+  }
+  await update($, turns, () => saved.turns)
+  await update($, spent, () => saved.tokens)
+}
+
 /**
  * Adds a finished turn to today's totals of this session, writes the session's
  * file whole, then sums every session's for the band, the pane and the report.
@@ -374,12 +451,7 @@ const book = async ($: EngineInterface, record: TurnRecord) => {
   await update($, own, () => ({ sessionId: id, days }))
   await $.fs.write(path, JSON.stringify({ days }))
 
-  const all = await collect($, place.dir, now)
-  let monthUsd = 0
-  for (const [key, totals] of Object.entries(all)) {
-    if (monthOf(key) === month) monthUsd += totals.usd
-  }
-  await update($, daily, () => ({ day, today: all[day]?.usd ?? 0, month: monthUsd }))
+  const all = await refreshDaily($, place.dir, now)
 
   const custom = typeof reportOption === 'string' ? reportOption.trim() : ''
   const target = custom === '' ? `${place.dir}/costs.md` : custom.replace(/^~(?=[\\/]|$)/, place.home)
@@ -436,6 +508,17 @@ export const register: Register = (on, options) => {
       if (isRunning) $.ui.invalidate('ui.render')
     })
 
+    // the history and the day's money never stand in a session's way
+    try {
+      const place = await dataDir($)
+      if (place) {
+        if (e.source !== 'clear') await loadHistory($, place.dir)
+        await refreshDaily($, place.dir, await $.clock.now())
+      }
+    } catch (error) {
+      await complain($, String(error))
+    }
+
     return next(e)
   })
 
@@ -474,7 +557,7 @@ export const register: Register = (on, options) => {
     const cost = mine ? await sofar($, mine) : { tokens: undefined, usd: undefined }
     const record: TurnRecord = {
       id: e.turnId,
-      text: mine ? mine.text : '',
+      text: mine ? Array.from(mine.text).slice(0, TEXT_CHARS).join('') : '',
       seconds: Math.round(e.durationMs / 1000),
       reason: e.reason,
       ...(cost.tokens && { tokens: cost.tokens }),
@@ -483,6 +566,12 @@ export const register: Register = (on, options) => {
     await update($, turns, list => [...list, record].slice(-MAX_TURNS))
     await update($, running, () => null)
     isRunning = false
+
+    try {
+      await saveHistory($)
+    } catch (error) {
+      await complain($, String(error))
+    }
 
     try {
       await book($, record)
