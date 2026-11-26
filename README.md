@@ -53,7 +53,7 @@ claude --plugin-dir /path/to/tickturn
 
 ## Статистика по дням
 
-После каждого запроса мод прибавляет его стоимость, время и сам запрос к текущему дню и пересобирает отчёт:
+Мод считает дни по истории запросов всех сессий: после каждого запроса и при старте сессии он складывает стоимость, время и число запросов по дням и пересобирает отчёт:
 
 | День       | Сумма  | Запросов | Время   |
 | ---------- | ------ | -------- | ------- |
@@ -71,9 +71,10 @@ claude --plugin-dir /path/to/tickturn
 - Сумма — оценка по тарифам API, та же, что показывает `/cost`; на подписке это не реальное списание.
 - День — местная дата окончания запроса. Время — сколько Claude работал над запросами, а не сколько была открыта сессия.
 - Учёт идёт с момента установки версии 0.4.0 и только на этом компьютере.
-- «Сегодня» обновляется, когда запрос заканчивается в этой сессии: траты соседних сессий появятся после следующего своего запроса.
-- Данные лежат в `~/.claude/tickturn/`: по файлу на сессию в `sessions/<месяц>/`, закончившиеся месяцы сворачиваются в `months/<месяц>.json`.
-- История запросов каждой сессии — в `history/<id сессии>.json`: до 500 последних запросов, от текста запроса хранятся первые 100 символов.
+- «Сегодня» считается и при старте сессии, а не только после её первого запроса.
+- Траты соседних сессий появятся здесь после следующего своего запроса.
+- Данные лежат в `~/.claude/tickturn/history/`: по файлу на сессию, `<id сессии>.json`. В нём запросы с текстом (первые 100 символов), временем окончания, длительностью, токенами и стоимостью. Других файлов с данными нет, отчёт `costs.md` собирается из этих.
+- Версии 0.4.0 и 0.5.0 хранили суммы по дням в `sessions/<месяц>/`. Перенести их в историю: `python tools/migrate_legacy.py` (только сравнить) и `python tools/migrate_legacy.py --apply`. Скрипт восстанавливает запросы каждой такой сессии из логов Claude Code (`~/.claude/projects/`), цены — по тарифам API; старые папки переносит в `legacy/`. Повторный запуск безопасен.
 
 ## Как это работает
 
@@ -82,7 +83,7 @@ claude --plugin-dir /path/to/tickturn
 - `turn.start` / `turn.complete` — измеряют каждый ход главного цикла (`durationMs` от движка); ходы субагентов отдельно не считаются, но их токены входят в ход, внутри которого они шли.
 - `$.session.usage()` — стоимость сессии в начале и в конце хода.
 - `ui.render` на `AbovePrompt` и `Pane` — рисуют полосу и историю.
-- `$.fs` — файл своей сессии, чтение файлов остальных и отчёт; `$.session.id()` — имя файла сессии.
+- `$.fs` — файл истории своей сессии, чтение файлов остальных и отчёт; `$.session.id()` — имя файла сессии.
 - `$.env.get` и `Intl` — определяют язык один раз при загрузке.
 - Состояние живёт в `$.state` (`types/index.d.ts` — его контракт) и переживает горячую перезагрузку модуля в пределах сессии. После каждого хода история пишется в `history/<id>.json`, а при старте сессии с пустой памятью читается обратно (кроме старта после `/clear`).
 
@@ -158,7 +159,7 @@ Override it in the mod's `tickturn.language` setting (`/config` → tickturn →
 
 ## Daily statistics
 
-After each request the mod adds its cost, its time and the request itself to the current day and rebuilds the report:
+The mod counts days from every session's request history: after each request and at session start it sums cost, time and requests by day and rebuilds the report:
 
 | Day        | Amount | Requests | Time    |
 | ---------- | ------ | -------- | ------- |
@@ -176,9 +177,10 @@ Worth knowing:
 - The amount is an estimate at API prices, the one `/cost` shows; on a subscription it is not what you were charged.
 - The day is the local date a request finished on. The time is how long Claude worked on requests, not how long the session stayed open.
 - Counting starts when version 0.4.0 is installed, and covers this computer only.
-- “Today” is refreshed when a request finishes in this session: what other sessions spent appears after this session's next request.
-- The data is in `~/.claude/tickturn/`: a file per session under `sessions/<month>/`, finished months rolled up into `months/<month>.json`.
-- Each session's request history is in `history/<session id>.json`: up to the last 500 requests, the first 100 characters of each request's text.
+- “Today” is counted at session start too, not only after the session's first request.
+- What other sessions spend appears after this session's next request.
+- The data is in `~/.claude/tickturn/history/`: a file per session, `<session id>.json`, with its requests: text (the first 100 characters), end time, duration, tokens and cost. There are no other data files; the `costs.md` report is built from these.
+- Versions 0.4.0 and 0.5.0 kept day totals under `sessions/<month>/`. To move them into the history: `python tools/migrate_legacy.py` (compare only), then `python tools/migrate_legacy.py --apply`. The script rebuilds each such session's requests from Claude Code's transcripts (`~/.claude/projects/`), priced at API rates, and moves the old folders to `legacy/`. Running it again is safe.
 
 ## How it works
 
@@ -187,7 +189,7 @@ The mod is a hooks module (`hooks/register.tsx`):
 - `turn.start` / `turn.complete` — measure each main-loop turn (`durationMs` from the engine); subagent turns are not counted separately, but their tokens count toward the turn they ran in.
 - `$.session.usage()` — the session cost at the start and the end of each turn.
 - `ui.render` on `AbovePrompt` and `Pane` — draw the band and the history.
-- `$.fs` — the session's own file, the other sessions' files and the report; `$.session.id()` names the session's file.
+- `$.fs` — the session's own history file, the other sessions' files and the report; `$.session.id()` names the session's file.
 - `$.env.get` and `Intl` — pick the language once at load.
 - State lives in `$.state` (`types/index.d.ts` is its contract) and survives hot reloads of the module within a session. After every turn the history is written to `history/<id>.json`, and a session that starts with nothing in memory reads it back (except a start after `/clear`).
 

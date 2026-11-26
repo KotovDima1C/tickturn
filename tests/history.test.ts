@@ -143,6 +143,7 @@ test('a finished turn is saved to the session history file', { options: { langua
         text: 'hello there',
         seconds: 3,
         reason: 'answer',
+        endedAt: NOON,
         tokens: { input: 10, output: 20, cacheRead: 5, cacheWrite: 1 },
         usd: 0.25,
       },
@@ -219,12 +220,39 @@ test('a broken history file starts the session empty', { options: { language: 'e
 test('today shows from the session start, before any turn of it ends', { options: { language: 'en' } }, async ($, on) => {
   const { files } = world(on)
   files.set(
-    `${DIR}/sessions/2026-11/other.json`,
-    JSON.stringify({ days: { '2026-11-20': { usd: 2, requests: 5, seconds: 60 } } }),
+    `${DIR}/history/other.json`,
+    JSON.stringify({
+      turns: [{ id: 'o1', text: 'o1', seconds: 60, reason: 'answer', usd: 2, endedAt: NOON }],
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }),
   )
   await $.session.start({ cwd: '/w' })
 
   await $.turn.start({ turnId: 't1', text: 'hello' })
 
   expect(await textOf($, BAND)).toContain('Today: $2.00')
+})
+
+test('a save keeps turns and earlier days the file holds that memory has not', { options: { language: 'en' } }, async ($, on) => {
+  const { cost, files } = world(on)
+  await $.session.start({ cwd: '/w' })
+  files.set(HISTORY, JSON.stringify({ ...saved, before: { '2026-11-01': { usd: 9, requests: 3, seconds: 30 } } }))
+
+  await turn($, cost, 't1', 'hello', 1.25)
+
+  const after = JSON.parse(files.get(HISTORY) ?? '{}')
+  expect(after.turns.map((t: { id: string }) => t.id)).toEqual(['old1', 'old2', 't1'])
+  expect(after.before).toEqual({ '2026-11-01': { usd: 9, requests: 3, seconds: 30 } })
+})
+
+test('after /clear the next save starts the file over', { options: { language: 'en' } }, async ($, on) => {
+  const { cost, files } = world(on)
+  on('session.end', (_, e) => e as never)
+  files.set(HISTORY, JSON.stringify(saved))
+  await $.session.start({ cwd: '/w' })
+
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  await turn($, cost, 't1', 'hello', 1.25)
+
+  expect(JSON.parse(files.get(HISTORY) ?? '{}').turns.map((t: { id: string }) => t.id)).toEqual(['t1'])
 })

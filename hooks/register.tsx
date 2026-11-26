@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { DayTotals, Days, RunningTurn, Tokens, TurnReason, TurnRecord } from '../types'
+import type { DayTotals, Days, History, RunningTurn, Tokens, TurnReason, TurnRecord } from '../types'
 
 const PANE = 'tickturn'
 const COMMAND = 'time'
@@ -123,7 +123,6 @@ const NO_TOKENS: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 /** Every turn's tokens this session, subagents' included: a turn's own is the growth of this while it ran. */
 const spent = atom({ plugin: 'tickturn', key: 'tokens' } as const, NO_TOKENS)
 const lastUsd = atom({ plugin: 'tickturn', key: 'lastUsd' } as const, null)
-const own = atom({ plugin: 'tickturn', key: 'own' } as const, null)
 const daily = atom({ plugin: 'tickturn', key: 'daily' } as const, null)
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -169,7 +168,6 @@ const sessionUsd = async ($: EngineInterface): Promise<number | undefined> => {
   }
 }
 
-const DAY_MS = 86_400_000
 const NO_DAY: DayTotals = { usd: 0, requests: 0, seconds: 0 }
 
 /** The local calendar day of a time, `YYYY-MM-DD`. */
@@ -205,11 +203,9 @@ const complain = async ($: EngineInterface, what: string) => {
   }
 }
 
-/** The days a statistics file holds; entries that are not day totals are left out. */
-const parseDays = (text: string): Days => {
+/** Day totals as a file holds them; entries that are not day totals are left out. */
+const parseDays = (map: unknown): Days => {
   const days: Days = {}
-  const raw: unknown = JSON.parse(text)
-  const map = typeof raw === 'object' && raw !== null ? (raw as { days?: unknown }).days : undefined
   if (typeof map !== 'object' || map === null) return days
   for (const [day, value] of Object.entries(map)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || typeof value !== 'object' || value === null) continue
@@ -223,16 +219,6 @@ const parseDays = (text: string): Days => {
   return days
 }
 
-/** A statistics file's days, or undefined when it cannot be read or parsed. */
-const readDays = async ($: EngineInterface, path: string): Promise<Days | undefined> => {
-  try {
-    return parseDays(await $.fs.read(path))
-  } catch (error) {
-    await complain($, `${path}: ${String(error)}`)
-    return undefined
-  }
-}
-
 /** A folder's entries, none where it is not there. */
 const list = async ($: EngineInterface, path: string) => {
   try {
@@ -242,62 +228,36 @@ const list = async ($: EngineInterface, path: string) => {
   }
 }
 
-/** Session files read so far, by `<month>/<name>`, with the size and time they were read at. */
-const seen = new Map<string, { mtimeMs: number; size: number; days: Days }>()
-/** Rolled-up months read so far, by month. */
-const rolled = new Map<string, Days>()
-
-/** One month's session files summed by day; `isWhole` is false when a file could not be used. */
-const sessionsOf = async ($: EngineInterface, dir: string, month: string) => {
-  let days: Days = {}
-  let isWhole = true
-  for (const entry of await list($, `${dir}/sessions/${month}`)) {
-    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    const key = `${month}/${entry.name}`
-    let hit = seen.get(key)
-    if (!hit || hit.mtimeMs !== entry.mtimeMs || hit.size !== entry.size) {
-      const fresh = await readDays($, `${dir}/sessions/${key}`)
-      if (fresh === undefined) {
-        isWhole = false
-        continue
-      }
-      hit = { mtimeMs: entry.mtimeMs, size: entry.size, days: fresh }
-      seen.set(key, hit)
-    }
-    days = merge(days, hit.days)
+/** A session's turns summed by the local day each ended on; a turn with no end time counts on `fallbackMs`'s day. */
+const daysOf = (history: History, fallbackMs: number): Days => {
+  let days: Days = { ...history.before }
+  for (const turn of history.turns) {
+    const day = dayKey(turn.endedAt ?? fallbackMs)
+    days = merge(days, { [day]: { usd: turn.usd ?? 0, requests: 1, seconds: turn.seconds } })
   }
-  return { days, isWhole }
+  return days
 }
 
-/**
- * Every session's days on this computer, summed. A month with a file under
- * `months/` is read from it alone; a month that ended over a day ago and has
- * none gets one, written from its session files once they all parse.
- */
-const collect = async ($: EngineInterface, dir: string, now: number) => {
-  let all: Days = {}
-  const done = new Set<string>()
-  for (const entry of await list($, `${dir}/months`)) {
-    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    const month = entry.name.slice(0, -'.json'.length)
-    let days = rolled.get(month)
-    if (!days) {
-      days = await readDays($, `${dir}/months/${entry.name}`)
-      if (!days) continue
-      rolled.set(month, days)
-    }
-    done.add(month)
-    all = merge(all, days)
-  }
+/** History files read so far, by name, with the size and time they were read at. */
+const seen = new Map<string, { mtimeMs: number; size: number; days: Days }>()
 
-  const open = monthOf(dayKey(now - DAY_MS))
-  for (const folder of await list($, `${dir}/sessions`)) {
-    if (folder.kind !== 'dir' || done.has(folder.name)) continue
-    const { days, isWhole } = await sessionsOf($, dir, folder.name)
-    if (isWhole && folder.name < open) {
-      await $.fs.write(`${dir}/months/${folder.name}.json`, JSON.stringify({ days }))
+/** Every session's days on this computer, summed from the history files. */
+const collect = async ($: EngineInterface, dir: string) => {
+  let all: Days = {}
+  for (const entry of await list($, `${dir}/history`)) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    let hit = seen.get(entry.name)
+    if (!hit || hit.mtimeMs !== entry.mtimeMs || hit.size !== entry.size) {
+      const path = `${dir}/history/${entry.name}`
+      try {
+        hit = { mtimeMs: entry.mtimeMs, size: entry.size, days: daysOf(parseHistory(await $.fs.read(path)), entry.mtimeMs) }
+      } catch (error) {
+        await complain($, `${path}: ${String(error)}`)
+        continue
+      }
+      seen.set(entry.name, hit)
     }
-    all = merge(all, days)
+    all = merge(all, hit.days)
   }
   return all
 }
@@ -324,16 +284,17 @@ const report = (all: Days, t: Strings) => {
 }
 
 /**
- * What the session cost grew by since the last turn booked. At the first turn
- * booked that is the turn's own cost, so a resumed session's earlier spend is
- * not booked twice; a counter that started over counts from zero.
+ * What the session cost grew by since the last turn ended: the turn's own cost
+ * and whatever the session spent between turns. At the first turn after the mod
+ * started that is the turn's own cost, so a resumed session's earlier spend is
+ * not counted twice; a counter that started over counts from zero.
  */
-const growth = async ($: EngineInterface, record: TurnRecord) => {
+const growth = async ($: EngineInterface, own: number | undefined) => {
   const now = await sessionUsd($)
-  if (now === undefined) return 0
+  if (now === undefined) return undefined
   const last = await read($, lastUsd)
   await update($, lastUsd, () => now)
-  if (last === null) return Math.max(0, record.usd ?? 0)
+  if (last === null) return Math.max(0, own ?? 0)
   return now >= last ? now - last : now
 }
 
@@ -347,7 +308,7 @@ const dataDir = async ($: EngineInterface) => {
 const refreshDaily = async ($: EngineInterface, dir: string, now: number) => {
   const day = dayKey(now)
   const month = monthOf(day)
-  const all = await collect($, dir, now)
+  const all = await collect($, dir)
   let monthUsd = 0
   for (const [key, totals] of Object.entries(all)) {
     if (monthOf(key) === month) monthUsd += totals.usd
@@ -370,10 +331,10 @@ const toTokens = (value: unknown): Tokens | undefined => {
   }
 }
 
-/** A history file's turns and token total; records that are not turns are left out. */
-const parseHistory = (text: string): { turns: TurnRecord[]; tokens: Tokens } => {
+/** A history file's turns, token total and pre-history days; records that are not turns are left out. */
+const parseHistory = (text: string): History => {
   const raw: unknown = JSON.parse(text)
-  const body = typeof raw === 'object' && raw !== null ? (raw as { turns?: unknown; tokens?: unknown }) : {}
+  const body = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
   const turns: TurnRecord[] = []
   for (const item of Array.isArray(body.turns) ? body.turns : []) {
     if (typeof item !== 'object' || item === null) continue
@@ -385,73 +346,70 @@ const parseHistory = (text: string): { turns: TurnRecord[]; tokens: Tokens } => 
       text: typeof r.text === 'string' ? r.text : '',
       seconds: Number(r.seconds) || 0,
       reason: r.reason,
+      ...(typeof r.endedAt === 'number' && { endedAt: r.endedAt }),
       ...(tokens && { tokens }),
       ...(typeof r.usd === 'number' && { usd: r.usd }),
     })
   }
-  return { turns: turns.slice(-MAX_TURNS), tokens: toTokens(body.tokens) ?? NO_TOKENS }
+  const before = parseDays(body.before)
+  return {
+    turns,
+    tokens: toTokens(body.tokens) ?? NO_TOKENS,
+    ...(Object.keys(before).length > 0 && { before }),
+  }
 }
 
 const historyPath = (dir: string, id: string) => `${dir}/history/${id}.json`
 
-/** Writes this session's turns and token total whole, so a restart or a resume can bring them back. */
-const saveHistory = async ($: EngineInterface) => {
-  const place = await dataDir($)
-  if (!place) return
-  const body = { turns: await read($, turns), tokens: await read($, spent) }
-  await $.fs.write(historyPath(place.dir, await $.session.id()), JSON.stringify(body))
+/** This session's history file as it stands, or undefined where there is none or it cannot be used. */
+const readHistory = async ($: EngineInterface, path: string) => {
+  if (!(await $.fs.exists(path))) return undefined
+  try {
+    return parseHistory(await $.fs.read(path))
+  } catch (error) {
+    await complain($, `${path}: ${String(error)}`)
+    return undefined
+  }
+}
+
+/** Set by /clear: the next save starts the file over instead of keeping turns it holds. */
+let isCleared = false
+
+/**
+ * Writes this session's history whole, so a restart or a resume can bring it
+ * back. Turns the file holds that memory has not (another window of the same
+ * session, a migration) are kept ahead of memory's, and so are its pre-history days.
+ */
+const saveHistory = async ($: EngineInterface, dir: string) => {
+  const path = historyPath(dir, await $.session.id())
+  const mine = await read($, turns)
+  const held = isCleared ? undefined : await readHistory($, path)
+  isCleared = false
+  const ids = new Set(mine.map(turn => turn.id))
+  const body: History = {
+    turns: [...(held?.turns.filter(turn => !ids.has(turn.id)) ?? []), ...mine],
+    tokens: await read($, spent),
+    ...(held?.before && { before: held.before }),
+  }
+  await $.fs.write(path, JSON.stringify(body))
 }
 
 /** Puts this session's saved turns back when the mod starts with none in memory. */
 const loadHistory = async ($: EngineInterface, dir: string) => {
   if ((await read($, turns)).length > 0 || (await read($, running)) !== null) return
-  const path = historyPath(dir, await $.session.id())
-  if (!(await $.fs.exists(path))) return
-  let saved: ReturnType<typeof parseHistory>
-  try {
-    saved = parseHistory(await $.fs.read(path))
-  } catch (error) {
-    await complain($, `${path}: ${String(error)}`)
-    return
-  }
-  await update($, turns, () => saved.turns)
+  const saved = await readHistory($, historyPath(dir, await $.session.id()))
+  if (!saved) return
+  await update($, turns, () => saved.turns.slice(-MAX_TURNS))
   await update($, spent, () => saved.tokens)
 }
 
-/**
- * Adds a finished turn to today's totals of this session, writes the session's
- * file whole, then sums every session's for the band, the pane and the report.
- */
-const book = async ($: EngineInterface, record: TurnRecord) => {
+/** Saves the session's history, then sums every session's for the band, the pane and the report. */
+const book = async ($: EngineInterface) => {
   const place = await dataDir($)
   if (!place) return
 
-  const now = await $.clock.now()
-  const day = dayKey(now)
-  const month = monthOf(day)
-  const id = await $.session.id()
-  const path = `${place.dir}/sessions/${month}/${id}.json`
-
-  const held = await read($, own)
-  const before =
-    held?.sessionId === id
-      ? held.days
-      : (await $.fs.exists(path))
-        ? ((await readDays($, path)) ?? {})
-        : {}
-  const days: Days = {}
-  for (const [key, totals] of Object.entries(before)) {
-    if (monthOf(key) === month) days[key] = totals
-  }
-  days[day] = addDay(days[day] ?? NO_DAY, {
-    usd: await growth($, record),
-    requests: 1,
-    seconds: record.seconds,
-  })
-  await update($, own, () => ({ sessionId: id, days }))
-  await $.fs.write(path, JSON.stringify({ days }))
-
-  const all = await refreshDaily($, place.dir, now)
+  await saveHistory($, place.dir)
+  const all = await refreshDaily($, place.dir, await $.clock.now())
 
   const custom = typeof reportOption === 'string' ? reportOption.trim() : ''
   const target = custom === '' ? `${place.dir}/costs.md` : custom.replace(/^~(?=[\\/]|$)/, place.home)
@@ -498,7 +456,7 @@ export const register: Register = (on, options) => {
   reportOption = options.reportPath
   hasComplained = false
   seen.clear()
-  rolled.clear()
+  isCleared = false
 
   on('session.start', async ($, e, next) => {
     const t = await strings($)
@@ -555,28 +513,24 @@ export const register: Register = (on, options) => {
     const current = await read($, running)
     const mine = current?.id === e.turnId ? current : null
     const cost = mine ? await sofar($, mine) : { tokens: undefined, usd: undefined }
+    const usd = await growth($, cost.usd)
     const record: TurnRecord = {
       id: e.turnId,
       text: mine ? Array.from(mine.text).slice(0, TEXT_CHARS).join('') : '',
       seconds: Math.round(e.durationMs / 1000),
       reason: e.reason,
+      endedAt: await $.clock.now(),
       ...(cost.tokens && { tokens: cost.tokens }),
-      ...(cost.usd !== undefined && { usd: cost.usd }),
+      ...(usd !== undefined && { usd }),
     }
     await update($, turns, list => [...list, record].slice(-MAX_TURNS))
     await update($, running, () => null)
     isRunning = false
 
     try {
-      await saveHistory($)
+      await book($)
     } catch (error) {
-      await complain($, String(error))
-    }
-
-    try {
-      await book($, record)
-    } catch (error) {
-      // the day's statistics never stand in a turn's way
+      // the history and the day's statistics never stand in a turn's way
       await complain($, String(error))
     }
 
@@ -588,6 +542,8 @@ export const register: Register = (on, options) => {
       await update($, turns, () => [])
       await update($, running, () => null)
       await update($, spent, () => NO_TOKENS)
+      await update($, lastUsd, () => null)
+      isCleared = true
       isRunning = false
     }
 

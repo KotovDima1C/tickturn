@@ -113,10 +113,23 @@ const turn = async ($: Engine, cost: { usd: number | undefined }, turnId: string
   })
 }
 
-const seed = (files: Files, path: string, days: Record<string, unknown>) =>
-  files.set(path, { text: JSON.stringify({ days }), mtimeMs: 0.5 })
+type Turn = { id: string; seconds: number; reason: 'answer'; text: string; usd?: number; endedAt?: number }
 
-const daysIn = (files: Files, path: string) => JSON.parse(files.get(path)?.text ?? '{}').days
+/** A turn of another session, ended at noon of `day`, local time. */
+const done = (id: string, day: string, usd: number, seconds: number): Turn => {
+  const [y, m, d] = day.split('-').map(Number)
+  return { id, text: id, seconds, reason: 'answer', usd, endedAt: new Date(y ?? 0, (m ?? 1) - 1, d, 12).getTime() }
+}
+
+const seed = (files: Files, id: string, turns: Turn[], before?: Record<string, unknown>, mtimeMs = 0.5) =>
+  files.set(`${DIR}/history/${id}.json`, {
+    text: JSON.stringify({ turns, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...(before && { before }) }),
+    mtimeMs,
+  })
+
+const history = (files: Files, id = 's1') => JSON.parse(files.get(`${DIR}/history/${id}.json`)?.text ?? '{}')
+
+const usds = (files: Files) => history(files).turns.map((t: { usd?: number }) => t.usd)
 
 const bandText = async ($: Engine) => {
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
@@ -132,14 +145,25 @@ const paneText = async ($: Engine) => {
   return text
 }
 
-test('a turn is booked to today in the session file', { options: { language: 'en' } }, async ($, on) => {
+const report = (files: Files) => files.get(`${DIR}/costs.md`)?.text ?? ''
+
+test('a turn is kept with its cost and the time it ended', { options: { language: 'en' } }, async ($, on) => {
   const { cost, files } = world(on)
 
   await turn($, cost, 't1', 1.25)
 
-  expect(daysIn(files, `${DIR}/sessions/2026-11/s1.json`)).toEqual({
-    '2026-11-20': { usd: 0.25, requests: 1, seconds: 3 },
-  })
+  expect(history(files).turns).toEqual([
+    {
+      id: 't1',
+      text: 'hello',
+      seconds: 3,
+      reason: 'answer',
+      endedAt: NOON,
+      tokens: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+      usd: 0.25,
+    },
+  ])
+  expect(report(files)).toContain('| 2026-11-20 | $0.25 | 1 | 0:00:03 |')
 })
 
 test('cost that grew between turns goes to the next turn', { options: { language: 'en' } }, async ($, on) => {
@@ -149,9 +173,8 @@ test('cost that grew between turns goes to the next turn', { options: { language
   cost.usd = 1.5
   await turn($, cost, 't2', 2)
 
-  expect(daysIn(files, `${DIR}/sessions/2026-11/s1.json`)).toEqual({
-    '2026-11-20': { usd: 1, requests: 2, seconds: 6 },
-  })
+  expect(usds(files)).toEqual([0.25, 0.75])
+  expect(report(files)).toContain('| 2026-11-20 | $1.00 | 2 | 0:00:06 |')
 })
 
 test('a cost counter that started over counts from zero', { options: { language: 'en' } }, async ($, on) => {
@@ -161,9 +184,7 @@ test('a cost counter that started over counts from zero', { options: { language:
   cost.usd = 0.25
   await turn($, cost, 't2', 0.5)
 
-  expect(daysIn(files, `${DIR}/sessions/2026-11/s1.json`)).toEqual({
-    '2026-11-20': { usd: 0.75, requests: 2, seconds: 6 },
-  })
+  expect(usds(files)).toEqual([0.25, 0.5])
 })
 
 test('without a cost ledger the day still gets its request and time', { options: { language: 'en' } }, async ($, on) => {
@@ -172,32 +193,13 @@ test('without a cost ledger the day still gets its request and time', { options:
 
   await turn($, cost, 't1', undefined)
 
-  expect(daysIn(files, `${DIR}/sessions/2026-11/s1.json`)).toEqual({
-    '2026-11-20': { usd: 0, requests: 1, seconds: 3 },
-  })
-})
-
-test('a resumed session adds to the file it left', { options: { language: 'en' } }, async ($, on) => {
-  const { cost, files } = world(on)
-  seed(files, `${DIR}/sessions/2026-11/s1.json`, {
-    '2026-11-19': { usd: 2, requests: 4, seconds: 40 },
-    '2026-11-20': { usd: 3, requests: 2, seconds: 30 },
-  })
-
-  await turn($, cost, 't1', 1.25)
-
-  expect(daysIn(files, `${DIR}/sessions/2026-11/s1.json`)).toEqual({
-    '2026-11-19': { usd: 2, requests: 4, seconds: 40 },
-    '2026-11-20': { usd: 3.25, requests: 3, seconds: 33 },
-  })
+  expect(usds(files)).toEqual([undefined])
+  expect(report(files)).toContain('| 2026-11-20 | $0.00 | 1 | 0:00:03 |')
 })
 
 test('the band and the pane show today and the month over every session, money only', { options: { language: 'en' } }, async ($, on) => {
   const { cost, files } = world(on)
-  seed(files, `${DIR}/sessions/2026-11/other.json`, {
-    '2026-11-19': { usd: 1, requests: 1, seconds: 10 },
-    '2026-11-20': { usd: 2, requests: 5, seconds: 60 },
-  })
+  seed(files, 'other', [done('o1', '2026-11-19', 1, 10), done('o2', '2026-11-20', 2, 60)])
 
   await turn($, cost, 't1', 1.25)
 
@@ -205,10 +207,7 @@ test('the band and the pane show today and the month over every session, money o
   const pane = await paneText($)
   expect(pane).toContain('Today | $2.25')
   expect(pane).toContain('This month | $3.25')
-  expect(daysIn(files, `${DIR}/sessions/2026-11/other.json`)).toEqual({
-    '2026-11-19': { usd: 1, requests: 1, seconds: 10 },
-    '2026-11-20': { usd: 2, requests: 5, seconds: 60 },
-  })
+  expect(history(files, 'other').turns).toHaveLength(2)
 })
 
 test('the band says today in Russian', { options: { language: 'ru' } }, async ($, on) => {
@@ -233,7 +232,37 @@ test('without a cost ledger no daily money is shown', { options: { language: 'en
 test('a broken file of another session is skipped', { options: { language: 'en' } }, async ($, on) => {
   const { cost, files } = world(on)
   on('ui.log', () => ({ value: undefined }))
-  files.set(`${DIR}/sessions/2026-11/broken.json`, { text: 'not json', mtimeMs: 0.5 })
+  files.set(`${DIR}/history/broken.json`, { text: 'not json', mtimeMs: 0.5 })
+
+  await turn($, cost, 't1', 1.25)
+
+  expect(await bandText($)).toContain('Today: $0.25')
+})
+
+test('a turn with no end time counts on the day its file was written', { options: { language: 'en' } }, async ($, on) => {
+  const { cost, files } = world(on)
+  seed(files, 'old', [{ id: 'o1', text: 'o1', seconds: 5, reason: 'answer', usd: 2 }], undefined, NOON)
+
+  await turn($, cost, 't1', 1.25)
+
+  expect(report(files)).toContain('| 2026-11-20 | $2.25 | 2 | 0:00:08 |')
+})
+
+test('days a session booked before it kept turns are counted', { options: { language: 'en' } }, async ($, on) => {
+  const { cost, files } = world(on)
+  seed(files, 'legacy', [], { '2026-11-19': { usd: 3, requests: 4, seconds: 40 } })
+
+  await turn($, cost, 't1', 1.25)
+
+  expect(report(files)).toContain('| 2026-11-19 | $3.00 | 4 | 0:00:40 |')
+})
+
+test('the old per-month day files are not read', { options: { language: 'en' } }, async ($, on) => {
+  const { cost, files } = world(on)
+  files.set(`${DIR}/sessions/2026-11/old.json`, {
+    text: JSON.stringify({ days: { '2026-11-20': { usd: 100, requests: 9, seconds: 9 } } }),
+    mtimeMs: 0.5,
+  })
 
   await turn($, cost, 't1', 1.25)
 
@@ -242,30 +271,25 @@ test('a broken file of another session is skipped', { options: { language: 'en' 
 
 test('the report lists days and months, newest first, with requests and time', { options: { language: 'en' } }, async ($, on) => {
   const { cost, files } = world(on)
-  seed(files, `${DIR}/sessions/2026-11/other.json`, {
-    '2026-11-19': { usd: 1, requests: 1, seconds: 10 },
-    '2026-11-20': { usd: 2, requests: 5, seconds: 60 },
-  })
-  seed(files, `${DIR}/sessions/2026-10/old.json`, {
-    '2026-10-31': { usd: 4, requests: 9, seconds: 3700 },
-  })
+  seed(files, 'other', [done('o1', '2026-11-19', 1, 10), done('o2', '2026-11-20', 2, 60)])
+  seed(files, 'old', [done('p1', '2026-10-31', 4, 3700)])
 
   await turn($, cost, 't1', 1.25)
 
-  expect(files.get(`${DIR}/costs.md`)?.text).toBe(
+  expect(report(files)).toBe(
     [
       '# Claude Code spending',
       '',
       '| Day | Amount | Requests | Time |',
       '| --- | --- | --- | --- |',
-      '| 2026-11-20 | $2.25 | 6 | 0:01:03 |',
+      '| 2026-11-20 | $2.25 | 2 | 0:01:03 |',
       '| 2026-11-19 | $1.00 | 1 | 0:00:10 |',
-      '| 2026-10-31 | $4.00 | 9 | 1:01:40 |',
+      '| 2026-10-31 | $4.00 | 1 | 1:01:40 |',
       '',
       '| Month | Amount | Requests | Time |',
       '| --- | --- | --- | --- |',
-      '| 2026-11 | $3.25 | 7 | 0:01:13 |',
-      '| 2026-10 | $4.00 | 9 | 1:01:40 |',
+      '| 2026-11 | $3.25 | 3 | 0:01:13 |',
+      '| 2026-10 | $4.00 | 1 | 1:01:40 |',
       '',
     ].join('\n'),
   )
@@ -282,34 +306,4 @@ test('the report is Russian with the Russian UI, at the path the option names', 
   expect(text).toContain('| Месяц | Сумма | Запросов | Время |')
   expect(text).toContain('| 2026-11-20 | $0.25 | 1 | 0:00:03 |')
   expect(files.has(`${DIR}/costs.md`)).toBe(false)
-})
-
-test('a finished month is rolled up into one file, and read from it afterwards', { options: { language: 'en' } }, async ($, on) => {
-  const { cost, files } = world(on)
-  seed(files, `${DIR}/sessions/2026-09/a.json`, { '2026-09-30': { usd: 4, requests: 9, seconds: 100 } })
-  seed(files, `${DIR}/sessions/2026-09/b.json`, { '2026-09-30': { usd: 1, requests: 1, seconds: 20 } })
-  seed(files, `${DIR}/months/2026-08.json`, { '2026-08-15': { usd: 7, requests: 3, seconds: 50 } })
-  seed(files, `${DIR}/sessions/2026-08/stale.json`, { '2026-08-15': { usd: 100, requests: 100, seconds: 100 } })
-
-  await turn($, cost, 't1', 1.25)
-
-  expect(daysIn(files, `${DIR}/months/2026-09.json`)).toEqual({
-    '2026-09-30': { usd: 5, requests: 10, seconds: 120 },
-  })
-  expect(files.has(`${DIR}/months/2026-11.json`)).toBe(false)
-  const text = files.get(`${DIR}/costs.md`)?.text ?? ''
-  expect(text).toContain('| 2026-09 | $5.00 | 10 | 0:02:00 |')
-  expect(text).toContain('| 2026-08 | $7.00 | 3 | 0:00:50 |')
-})
-
-test('a month with a broken file is not rolled up', { options: { language: 'en' } }, async ($, on) => {
-  const { cost, files } = world(on)
-  on('ui.log', () => ({ value: undefined }))
-  seed(files, `${DIR}/sessions/2026-09/a.json`, { '2026-09-30': { usd: 4, requests: 9, seconds: 100 } })
-  files.set(`${DIR}/sessions/2026-09/broken.json`, { text: 'not json', mtimeMs: 0.5 })
-
-  await turn($, cost, 't1', 1.25)
-
-  expect(files.has(`${DIR}/months/2026-09.json`)).toBe(false)
-  expect(files.get(`${DIR}/costs.md`)?.text ?? '').toContain('| 2026-09 | $4.00 | 9 | 0:01:40 |')
 })

@@ -15,8 +15,10 @@ export type TurnRecord = {
   reason: TurnReason
   /** Tokens of the turn, its subagents' included; absent on records from before 0.3.0. */
   tokens?: Tokens
-  /** US dollars the session cost grew by during the turn; absent where the host keeps no cost ledger. */
+  /** US dollars the session cost grew by since the turn before ended; absent where the host keeps no cost ledger. */
   usd?: number
+  /** When the turn ended, ms since the epoch; the day it counts on. Absent on records from before 0.6.0. */
+  endedAt?: number
 }
 
 export type RunningTurn = {
@@ -39,8 +41,8 @@ export type DayTotals = {
 /** Totals by local day, keyed `YYYY-MM-DD`. */
 export type Days = Record<string, DayTotals>
 
-/** The days this session has booked so far in the current month, as its file holds them. */
-export type OwnDays = { sessionId: string; days: Days }
+/** A session's file under `history/`: its turns, their token total, and days booked before it kept turns. */
+export type History = { turns: TurnRecord[]; tokens: Tokens; before?: Days }
 
 /** What the band and the pane draw: every session's money for `day` and for its month. */
 export type Daily = { day: string; today: number; month: number }
@@ -53,7 +55,6 @@ declare module 'claude-code' {
       tokens: Tokens
       /** The session cost at the last turn booked; null until the first. */
       lastUsd: number | null
-      own: OwnDays | null
       daily: Daily | null
     }
   }
