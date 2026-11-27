@@ -256,3 +256,18 @@ test('after /clear the next save starts the file over', { options: { language: '
 
   expect(JSON.parse(files.get(HISTORY) ?? '{}').turns.map((t: { id: string }) => t.id)).toEqual(['t1'])
 })
+
+test('turns without an end time get the time their file was written, once', { options: { language: 'en' } }, async ($, on) => {
+  const { cost, files } = world(on)
+  files.set(HISTORY, JSON.stringify(saved))
+  await $.session.start({ cwd: '/w', source: 'resume' })
+
+  await turn($, cost, 't3', 'third', 1.25)
+  const first = JSON.parse(files.get(HISTORY) ?? '{}').turns
+  await turn($, cost, 't4', 'fourth', 1.5)
+  const second = JSON.parse(files.get(HISTORY) ?? '{}').turns
+
+  expect(first.every((t: { endedAt?: number }) => typeof t.endedAt === 'number')).toBe(true)
+  expect(second[0].endedAt).toBe(first[0].endedAt)
+  expect(second[1].endedAt).toBe(first[1].endedAt)
+})

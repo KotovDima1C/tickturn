@@ -4,6 +4,8 @@
 
 Мод для [Claude Code](https://claude.com/claude-code), который показывает, сколько времени, токенов и денег Claude потратил на каждый запрос и на всю сессию.
 
+Сайт: https://kotovdima1c.github.io/tickturn/
+
 ![Полоса над полем ввода с живым отсчётом и панель истории](docs/screenshots/mock-running.png)
 
 - **Полоса над полем ввода** — живой таймер, пока ход идёт (`⏱ Идёт: 0:42 · Сессия: 4:22 · запросов: 7 · токенов: 1.2M · $0.84 · Сегодня: $3.42`), и время последнего хода в покое.
@@ -20,13 +22,14 @@
 
 ## Установка
 
-В терминале:
+В Claude Code (в терминале или в поле ввода десктопного приложения):
 
 ```
-/plugin install tickturn --marketplace KotovDima1C/tickturn
+/plugin marketplace add KotovDima1C/tickturn
+/plugin install tickturn@tickturn
 ```
 
-Ответьте `y`, чтобы добавить marketplace, и выберите область **user** — тогда мод загрузится во всех проектах.
+Выберите область **user** — тогда мод загрузится во всех проектах. Перезапустите Claude Code.
 
 ### Из локальной папки
 
@@ -74,7 +77,7 @@ claude --plugin-dir /path/to/tickturn
 - «Сегодня» считается и при старте сессии, а не только после её первого запроса.
 - Траты соседних сессий появятся здесь после следующего своего запроса.
 - Данные лежат в `~/.claude/tickturn/history/`: по файлу на сессию, `<id сессии>.json`. В нём запросы с текстом (первые 100 символов), временем окончания, длительностью, токенами и стоимостью. Других файлов с данными нет, отчёт `costs.md` собирается из этих.
-- Версии 0.4.0 и 0.5.0 хранили суммы по дням в `sessions/<месяц>/`. Перенести их в историю: `python tools/migrate_legacy.py` (только сравнить) и `python tools/migrate_legacy.py --apply`. Скрипт восстанавливает запросы каждой такой сессии из логов Claude Code (`~/.claude/projects/`), цены — по тарифам API; старые папки переносит в `legacy/`. Повторный запуск безопасен.
+- Версии 0.4.0 и 0.5.0 хранили суммы по дням в `sessions/<месяц>/`. Перенести их в историю: `python tools/migrate_legacy.py` (только сравнить) и `python tools/migrate_legacy.py --apply`. Скрипт восстанавливает запросы каждой такой сессии из логов Claude Code (`~/.claude/projects/`), цены — по тарифам API; старые папки переносит в `legacy/`. Так же он чинит сессии, которые писало окно, ещё не перезапущенное после обновления на 0.6. Повторный запуск безопасен. Запускать после того, как все окна Claude Code перезапущены.
 
 ## Как это работает
 
@@ -110,6 +113,8 @@ MIT
 
 A [Claude Code](https://claude.com/claude-code) mod that shows how much time, how many tokens and how much money Claude spent on each request and on the whole session.
 
+Website (in Russian): https://kotovdima1c.github.io/tickturn/
+
 ![Band above the prompt with a live timer and the history pane](docs/screenshots/mock-running-en.png)
 
 - **Band above the prompt** — a live timer while a turn runs (`⏱ Running: 0:42 · Session: 4:22 · requests: 7 · tokens: 1.2M · $0.84 · Today: $3.42`), the last turn's time when idle.
@@ -126,13 +131,14 @@ Works in the terminal and in the Claude desktop app. The UI follows the system l
 
 ## Install
 
-In a terminal:
+In Claude Code (in a terminal or in the desktop app's prompt):
 
 ```
-/plugin install tickturn --marketplace KotovDima1C/tickturn
+/plugin marketplace add KotovDima1C/tickturn
+/plugin install tickturn@tickturn
 ```
 
-Answer `y` to add the marketplace, then pick the **user** scope so the mod loads in every project.
+Pick the **user** scope so the mod loads in every project, then restart Claude Code.
 
 ### From a local folder
 
@@ -180,7 +186,7 @@ Worth knowing:
 - “Today” is counted at session start too, not only after the session's first request.
 - What other sessions spend appears after this session's next request.
 - The data is in `~/.claude/tickturn/history/`: a file per session, `<session id>.json`, with its requests: text (the first 100 characters), end time, duration, tokens and cost. There are no other data files; the `costs.md` report is built from these.
-- Versions 0.4.0 and 0.5.0 kept day totals under `sessions/<month>/`. To move them into the history: `python tools/migrate_legacy.py` (compare only), then `python tools/migrate_legacy.py --apply`. The script rebuilds each such session's requests from Claude Code's transcripts (`~/.claude/projects/`), priced at API rates, and moves the old folders to `legacy/`. Running it again is safe.
+- Versions 0.4.0 and 0.5.0 kept day totals under `sessions/<month>/`. To move them into the history: `python tools/migrate_legacy.py` (compare only), then `python tools/migrate_legacy.py --apply`. The script rebuilds each such session's requests from Claude Code's transcripts (`~/.claude/projects/`), priced at API rates, and moves the old folders to `legacy/`. It also repairs sessions written by a window not yet restarted after the update to 0.6. Running it again is safe; run it once every Claude Code window has been restarted.
 
 ## How it works
 

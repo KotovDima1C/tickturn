@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<!-- Баннер превью ссылки tickturn: 1200×630. Перерисовать: tools/og/render.ps1 → docs/og.png
+     Правила — promo-playbook/playbook/02-banner.md. -->
+<link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Inter:wght@500;600&family=JetBrains+Mono:wght@500;700&family=Caveat:wght@700&display=block" rel="stylesheet">
+<link href="sticker.css" rel="stylesheet">
+<style>
+  /* Палитра: ночной терминал #0f1115 и янтарь счётчика #ffb020. Метафора: таксометр — секунды тикают, сумма растёт.
+     Композиция: заголовок сверху, полоса tickturn крупно снизу во всю ширину, стикер на её углу. */
+  :root {
+    --bg: #0f1115;
+    --ink: #eef0f3;
+    --ink-soft: #9aa3af;
+    --accent: #ffb020;
+    --accent-ink: #1a1203;
+
+    --display: "Russo One", "Segoe UI", sans-serif;
+    --body: "Inter", "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", Consolas, monospace;
+
+    --sticker-tilt: 4.5deg;
+    --sticker-size: 58px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    position: relative; color: var(--ink); font: 500 26px/1.4 var(--body);
+    background:
+      radial-gradient(760px 420px at 92% 0%, rgba(255, 176, 32, .16), transparent 70%),
+      radial-gradient(600px 300px at 10% 110%, rgba(255, 176, 32, .07), transparent 70%),
+      var(--bg);
+  }
+
+  .brand { position: absolute; left: 72px; top: 56px; display: flex; align-items: center; gap: 14px; font: 400 32px/1 var(--display); }
+  .brand .logo {
+    width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--accent); color: var(--accent-ink); font: 700 26px/1 var(--mono);
+  }
+  .url { position: absolute; right: 72px; top: 66px; font: 500 22px/1 var(--mono); color: var(--ink-soft); }
+
+  h1 { position: absolute; left: 72px; top: 142px; width: 760px; margin: 0; font: 400 70px/1.04 var(--display); letter-spacing: -0.01em; }
+  h1 .accent { color: var(--accent); }
+  .sub { position: absolute; left: 74px; top: 318px; width: 700px; margin: 0; color: var(--ink-soft); }
+
+  /* Герой: кусок окна Claude Code — полоса tickturn и поле ввода, уходит за нижний край */
+  .app {
+    position: absolute; left: 52px; right: 52px; top: 428px; height: 260px;
+    background: #1f1f1f; border: 2px solid #343434; border-radius: 22px; padding: 22px 24px;
+    box-shadow: 0 -20px 60px -30px rgba(255, 176, 32, .25), 0 40px 70px -30px rgba(0, 0, 0, .8);
+  }
+  .band {
+    display: flex; align-items: center; gap: 18px; background: #282828; border: 2px solid #3c3c3c; border-radius: 16px;
+    padding: 14px 16px 14px 24px; font: 500 31px/1.2 var(--body); color: #a3a3a3; white-space: nowrap;
+  }
+  .band .text { flex: 1; }
+  .band b { font: 700 31px/1 var(--mono); color: var(--accent); }
+  .band .hist { border: 2px solid #555; border-radius: 10px; padding: 8px 16px; color: #e0e0e0; font-size: 24px; }
+  .input { margin-top: 14px; border: 2px solid #3a3a3a; border-radius: 16px; padding: 18px 24px; color: #6f6f6f; font-size: 24px; }
+
+  .sticker { right: 70px; top: 268px; }
+</style>
+</head>
+<body>
+  <div class="brand"><span class="logo">⏱</span>tickturn</div>
+  <div class="url">kotovdima1c.github.io/tickturn</div>
+
+  <h1>Каждый ответ —<br><span class="accent">со&nbsp;счётом.</span></h1>
+  <p class="sub">Время, токены и&nbsp;деньги каждого запроса Claude&nbsp;Code. Бесплатно.</p>
+
+  <div class="app">
+    <div class="band">
+      <span class="text">⏱ Идёт: <b>0:42</b> · Сессия: <b>4:22</b> · <b>$0.84</b> · Сегодня: <b>$3.42</b></span>
+      <span class="hist">История</span>
+    </div>
+    <div class="input">Введите / для вызова команд</div>
+  </div>
+
+  <div class="sticker">Поддержи <span class="star">★</span><br>на GitHub <span class="heart">❤️</span></div>
+</body>
+</html>

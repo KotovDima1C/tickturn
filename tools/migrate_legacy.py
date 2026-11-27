@@ -190,8 +190,20 @@ def main(apply):
             into = legacy.setdefault(session_id, {}).setdefault(day, {'usd': 0.0, 'requests': 0, 'seconds': 0})
             for key in into:
                 into[key] += totals.get(key, 0)
+    # A window still running 0.5.0 rewrites its history file with turns that have no end time;
+    # those count on the day the file was written, so such sessions are rebuilt too.
+    stale = set()
+    for path in glob.glob(os.path.join(DIR, 'history', '*.json')):
+        session_id = os.path.basename(path)[:-len('.json')]
+        try:
+            turns = json.load(open(path, encoding='utf-8')).get('turns', [])
+        except ValueError:
+            continue
+        if any('endedAt' not in turn for turn in turns) and find_transcript(session_id):
+            stale.add(session_id)
+            legacy.setdefault(session_id, {})
     if not legacy:
-        print('No old session files: nothing to move.')
+        print('No old session files and no turns without an end time: nothing to do.')
         return
 
     out = {}

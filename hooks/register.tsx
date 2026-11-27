@@ -380,10 +380,23 @@ let isCleared = false
  * back. Turns the file holds that memory has not (another window of the same
  * session, a migration) are kept ahead of memory's, and so are its pre-history days.
  */
+/** When a session's history file was last written; undefined where it is not there. */
+const writtenAt = async ($: EngineInterface, dir: string, id: string) =>
+  (await list($, `${dir}/history`)).find(entry => entry.name === `${id}.json`)?.mtimeMs
+
+/**
+ * Gives turns written before 0.6.0, which have no end time, the time their file
+ * was written, once: otherwise they would move to whatever day the file is next written.
+ */
+const stamp = (list: TurnRecord[], at: number | undefined) =>
+  at === undefined ? list : list.map(turn => (turn.endedAt === undefined ? { ...turn, endedAt: at } : turn))
+
 const saveHistory = async ($: EngineInterface, dir: string) => {
-  const path = historyPath(dir, await $.session.id())
+  const id = await $.session.id()
+  const path = historyPath(dir, id)
   const mine = await read($, turns)
-  const held = isCleared ? undefined : await readHistory($, path)
+  const onDisk = isCleared ? undefined : await readHistory($, path)
+  const held = onDisk && { ...onDisk, turns: stamp(onDisk.turns, await writtenAt($, dir, id)) }
   isCleared = false
   const ids = new Set(mine.map(turn => turn.id))
   const body: History = {
@@ -397,9 +410,11 @@ const saveHistory = async ($: EngineInterface, dir: string) => {
 /** Puts this session's saved turns back when the mod starts with none in memory. */
 const loadHistory = async ($: EngineInterface, dir: string) => {
   if ((await read($, turns)).length > 0 || (await read($, running)) !== null) return
-  const saved = await readHistory($, historyPath(dir, await $.session.id()))
+  const id = await $.session.id()
+  const saved = await readHistory($, historyPath(dir, id))
   if (!saved) return
-  await update($, turns, () => saved.turns.slice(-MAX_TURNS))
+  const stamped = stamp(saved.turns, await writtenAt($, dir, id))
+  await update($, turns, () => stamped.slice(-MAX_TURNS))
   await update($, spent, () => saved.tokens)
 }
 

@@ -1,0 +1,22 @@
+/* Фирменная записка «Поддержи ★ на GitHub ❤️» для баннера 1200×630.
+   Общая для всех проектов: цвет, шрифт и скотч не меняем — только место и размер.
+   Нужен шрифт Caveat 700 (Google Fonts).
+   Разметка: <div class="sticker">Поддержи <span class="star">★</span><br>на GitHub <span class="heart">❤️</span></div>
+   Место задаётся в og.html: top/right/bottom/left и --sticker-tilt. */
+.sticker {
+  position: absolute; z-index: 3;
+  padding: 30px 38px 22px;
+  color: #4a3d00; background: #fff3b5;
+  border-radius: 3px 3px 14px 3px;              /* загнутый правый нижний угол */
+  box-shadow: 0 26px 40px -18px rgba(60, 30, 0, .6), 0 3px 6px rgba(60, 30, 0, .14);
+  transform: rotate(var(--sticker-tilt, 4deg));
+  text-align: center;
+  font: 700 var(--sticker-size, 60px)/1.02 "Caveat", "Segoe Print", cursive;
+}
+.sticker::before {                               /* полоска скотча */
+  content: ""; position: absolute; top: -20px; left: 50%;
+  width: 150px; height: 42px; transform: translateX(-50%) rotate(-4deg);
+  background: rgba(255, 255, 255, .6); border: 1px solid rgba(160, 140, 60, .2); border-radius: 2px;
+}
+.sticker .star { color: #e0a100; }
+.sticker .heart { font-family: "Segoe UI Emoji", sans-serif; font-size: .8em; }
